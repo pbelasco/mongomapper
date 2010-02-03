@@ -23,13 +23,13 @@ module MongoMapper
         plugin Plugins::Serialization
         plugin Plugins::Validations
         plugin Plugins::Callbacks # for now callbacks needs to be after validations
-        
+
         extend Plugins::Validations::DocumentMacros
       end
-      
+
       super
     end
-    
+
     module ClassMethods
       def inherited(subclass)
         subclass.set_collection_name(collection_name)
@@ -42,7 +42,6 @@ module MongoMapper
         else
           name_or_array
         end
-
         MongoMapper.ensure_index(self, keys_to_index, options)
       end
 
@@ -138,44 +137,44 @@ module MongoMapper
       def destroy_all(options={})
         all(options).each(&:destroy)
       end
-      
+
       def increment(*args)
         modifier_update('$inc', args)
       end
-      
+
       def decrement(*args)
         criteria, keys = criteria_and_keys_from_args(args)
         values, to_decrement = keys.values, {}
         keys.keys.each_with_index { |k, i| to_decrement[k] = -values[i].abs }
         collection.update(criteria, {'$inc' => to_decrement}, :multi => true)
       end
-      
+
       def set(*args)
         modifier_update('$set', args)
       end
-      
+
       def push(*args)
         modifier_update('$push', args)
       end
-      
+
       def push_all(*args)
         modifier_update('$pushAll', args)
       end
-      
+
       def push_uniq(*args)
         criteria, keys = criteria_and_keys_from_args(args)
         keys.each { |key, value | criteria[key] = {'$ne' => value} }
         collection.update(criteria, {'$push' => keys}, :multi => true)
       end
-      
+
       def pull(*args)
         modifier_update('$pull', args)
       end
-      
+
       def pull_all(*args)
         modifier_update('$pullAll', args)
       end
-      
+
       def pop(*args)
         modifier_update('$pop', args)
       end
@@ -196,7 +195,7 @@ module MongoMapper
       def set_database_name(name)
         @database_name = name
       end
-      
+
       def database_name
         @database_name
       end
@@ -243,109 +242,118 @@ module MongoMapper
       end
 
       private
-        def initialize_each(*docs)
-          instances = []
-          docs = [{}] if docs.blank?
-          docs.flatten.each do |attrs|
-            doc = new(attrs)
-            yield(doc)
-            instances << doc
-          end
-          instances.size == 1 ? instances[0] : instances
+      def initialize_each(*docs)
+        instances = []
+        docs = [{}] if docs.blank?
+        docs.flatten.each do |attrs|
+          doc = new(attrs)
+          yield(doc)
+          instances << doc
         end
+        instances.size == 1 ? instances[0] : instances
+      end
 
-        def modifier_update(modifier, args)
-          criteria, keys = criteria_and_keys_from_args(args)
-          modifiers = {modifier => keys}
-          collection.update(criteria, modifiers, :multi => true)
-        end
+      def modifier_update(modifier, args)
+        criteria, keys = criteria_and_keys_from_args(args)
+        modifiers = {modifier => keys}
+        collection.update(criteria, modifiers, :multi => true)
+      end
 
-        def criteria_and_keys_from_args(args)
-          keys     = args.pop
-          criteria = args[0].is_a?(Hash) ? args[0] : {:id => args}
-          [to_criteria(criteria), keys]
-        end
+      def criteria_and_keys_from_args(args)
+        keys     = args.pop
+        criteria = args[0].is_a?(Hash) ? args[0] : {:id => args}
+        [to_criteria(criteria), keys]
+      end
 
-        def find_all_first_last_error(args)
-          if args[0] == :first || args[0] == :last || args[0] == :all
-            raise ArgumentError, "#{self}.find(:#{args}) is no longer supported, use #{self}.#{args} instead."
-          end
+      def find_all_first_last_error(args)
+        if args[0] == :first || args[0] == :last || args[0] == :all
+          raise ArgumentError, "#{self}.find(:#{args}) is no longer supported, use #{self}.#{args} instead."
         end
+      end
 
-        def find_some(ids, options={})
-          ids = ids.flatten.compact.uniq
-          find_many(options.merge(:_id => ids)).compact
+      def find_some(ids, options={})
+        ids = ids.flatten.compact.uniq
+        find_many(options.merge(:_id => ids)).compact
+      end
+
+      def find_some!(ids, options={})
+        ids = ids.flatten.compact.uniq
+        documents = find_some(ids, options)
+
+        if ids.size == documents.size
+          documents
+        else
+          raise DocumentNotFound, "Couldn't find all of the ids (#{ids.to_sentence}). Found #{documents.size}, but was expecting #{ids.size}"
         end
-        
-        def find_some!(ids, options={})
-          ids = ids.flatten.compact.uniq
-          documents = find_some(ids, options)
-          
-          if ids.size == documents.size
-            documents
+      end
+
+      # All query methods that load documents pass through find_one or find_many
+      def find_one(options={})
+        criteria, options = to_finder_options(options)
+        if doc = collection.find_one(criteria, options)
+          load(doc)
+        end
+      end
+
+      # All query methods that load documents pass through find_one or find_many
+      def find_many(options)
+        criteria, options = to_finder_options(options)
+        collection.find(criteria, options).to_a.map do |doc|
+          load(doc)
+        end
+      end
+
+      def invert_order_clause(order)
+        order.split(',').map do |order_segment|
+          if order_segment =~ /\sasc/i
+            order_segment.sub(/\sasc/i, ' desc')
+          elsif order_segment =~ /\sdesc/i
+            order_segment.sub(/\sdesc/i, ' asc')
           else
-            raise DocumentNotFound, "Couldn't find all of the ids (#{ids.to_sentence}). Found #{documents.size}, but was expecting #{ids.size}"
+            "#{order_segment.strip} desc"
           end
+        end.join(',')
+      end
+
+      def update_single(id, attrs)
+        if id.blank? || attrs.blank? || !attrs.is_a?(Hash)
+          raise ArgumentError, "Updating a single document requires an id and a hash of attributes"
         end
 
-        # All query methods that load documents pass through find_one or find_many
-        def find_one(options={})
-          criteria, options = to_finder_options(options)
-          if doc = collection.find_one(criteria, options)
-            load(doc)
-          end
+        doc = find(id)
+        doc.update_attributes(attrs)
+        doc
+      end
+
+      def update_multiple(docs)
+        unless docs.is_a?(Hash)
+          raise ArgumentError, "Updating multiple documents takes 1 argument and it must be hash"
         end
 
-        # All query methods that load documents pass through find_one or find_many
-        def find_many(options)
-          criteria, options = to_finder_options(options)
-          collection.find(criteria, options).to_a.map do |doc|
-            load(doc)
-          end
-        end
+        instances = []
+        docs.each_pair { |id, attrs| instances << update(id, attrs) }
+        instances
+      end
 
-        def invert_order_clause(order)
-          order.split(',').map do |order_segment|
-            if order_segment =~ /\sasc/i
-              order_segment.sub /\sasc/i, ' desc'
-            elsif order_segment =~ /\sdesc/i
-              order_segment.sub /\sdesc/i, ' asc'
-            else
-              "#{order_segment.strip} desc"
-            end
-          end.join(',')
-        end
+      def to_criteria(options={})
+        FinderOptions.new(self, options).criteria
+      end
 
-        def update_single(id, attrs)
-          if id.blank? || attrs.blank? || !attrs.is_a?(Hash)
-            raise ArgumentError, "Updating a single document requires an id and a hash of attributes"
-          end
-
-          doc = find(id)
-          doc.update_attributes(attrs)
-          doc
-        end
-
-        def update_multiple(docs)
-          unless docs.is_a?(Hash)
-            raise ArgumentError, "Updating multiple documents takes 1 argument and it must be hash"
-          end
-
-          instances = []
-          docs.each_pair { |id, attrs| instances << update(id, attrs) }
-          instances
-        end
-
-        def to_criteria(options={})
-          FinderOptions.new(self, options).criteria
-        end
-
-        def to_finder_options(options={})
-          FinderOptions.new(self, options).to_a
-        end
+      def to_finder_options(options={})
+        FinderOptions.new(self, options).to_a
+      end
     end
 
     module InstanceMethods
+
+      def attr_accessible(*attributes)
+        write_inheritable_attribute(:attr_accessible, Set.new(attributes.map(&:to_s)) + (accessible_attributes || []))
+      end
+
+      def attr_protected(*attributes)
+        write_inheritable_attribute(:attr_protected, Set.new(attributes.map(&:to_s)) + (protected_attributes || []))
+      end
+      
       def collection
         self.class.collection
       end
@@ -364,7 +372,7 @@ module MongoMapper
         options.assert_valid_keys(:safe)
         save(options) || raise(DocumentNotValid.new(self))
       end
-      
+
       def update_attributes(attrs={})
         self.attributes = attrs
         save
@@ -378,7 +386,7 @@ module MongoMapper
       def destroy
         delete
       end
-      
+
       def delete
         self.class.delete(id) unless new?
       end
@@ -393,7 +401,7 @@ module MongoMapper
         end
       end
 
-    private
+      private
       def create_or_update(options={})
         result = new? ? create(options) : update(options)
         result != false
